@@ -44,17 +44,25 @@ CODE_TO_BUCKET = {c: name for name, codes in EDU_BUCKETS for c in codes}
 EDU_ORDER = [name for name, _ in EDU_BUCKETS]
 GRADE_ORDER = [f"{g:02d}" for g in range(1, 16)]  # GS-01 .. GS-15
 
-# Cells where the degree alone can qualify a hire for that grade under OPM
-# qualification standards: grade -> set of education buckets at/above the
-# qualifying credential. (Bachelor's -> GS-7 w/ superior academic achievement;
-# Master's -> GS-9; Ph.D./equivalent doctoral -> GS-11.) These mark the top
-# grade the degree reaches; a degree also qualifies for grades below it.
-_ADVANCED = {"Bachelor's", "Post-bachelor's", "Master's", "Doctorate", "Other prof/adv"}
-_MASTERS_UP = {"Master's", "Doctorate", "Other prof/adv"}
+# Cells where the degree alone can qualify a hire for that grade, under OPM's
+# group-coverage qualification standard for professional/2-grade-interval work:
+#   GS-5  <- bachelor's
+#   GS-7  <- bachelor's (superior academic achievement) / 1 yr graduate
+#   GS-9  <- master's / 2 yrs graduate
+#   GS-11 <- Ph.D. / 3 yrs graduate
+# A degree opens its ceiling grade AND every degree-entry grade below it, so the
+# highlighted region is a staircase (e.g. a master's also covers GS-5 and GS-7).
+QUAL_ENTRY_GRADES = ["05", "07", "09", "11"]
+EDU_CEILING = {            # highest degree-entry grade each education bucket opens
+    "Bachelor's":      7,
+    "Post-bachelor's": 7,
+    "Master's":        9,
+    "Other prof/adv":  9,
+    "Doctorate":       11,
+}
 QUAL_RULES = {
-    "07": _ADVANCED,            # bachelor's or higher
-    "09": _MASTERS_UP,          # master's or higher
-    "11": {"Doctorate"},        # Ph.D.
+    g: {b for b, ceil in EDU_CEILING.items() if ceil >= int(g)}
+    for g in QUAL_ENTRY_GRADES
 }
 
 
@@ -167,7 +175,8 @@ def accession_heatmap(series=None, pay_plans=None, all_plans=False,
     totals : bool   show the grey row/column total strips (default True).
     highlight_quals : bool
         Outline cells where the degree alone could qualify the hire for that
-        grade (bachelor's+→GS-7, master's+→GS-9, Ph.D.→GS-11).
+        grade. Staircase: bachelor's opens GS-5/7, master's GS-5/7/9, Ph.D.
+        GS-5/7/9/11 (each degree also covers the lower degree-entry grades).
     save : bool   write a PNG (default heatmap_<series|all>[_gsgg|_allplans].png)
     out : str     explicit output path (implies save)
 
@@ -262,6 +271,18 @@ def _plot(mat, series, series_name, pay_plans, show_totals=True,
         ax.add_patch(Rectangle((j - .5, i - .5), 1, 1, fill=False,
                                edgecolor=qual_color, lw=2.5, zorder=5))
 
+    # callout box with the headline share, dropped into the empty low-grade corner
+    if highlight_quals and qual_cells:
+        qual_sum = sum(data[i, j] for (i, j) in qual_cells)
+        share = qual_sum / grand if grand else 0
+        ax.text(
+            -0.3, 2.1,
+            f"{share:.0%} of hires\n(n = {int(qual_sum):,})\nsit in an outlined cell —\n"
+            "their degree alone could\nqualify them for that grade",
+            ha="left", va="center", fontsize=9.5, color="#0d3b66", zorder=6,
+            bbox=dict(boxstyle="round,pad=0.5", facecolor="white",
+                      edgecolor=qual_color, linewidth=1.8, alpha=0.95))
+
     # margin totals (grey strips): count + share of all hires
     if show_totals:
         grey, dark = "#e8e8e8", "#bdbdbd"
@@ -316,8 +337,8 @@ def _plot(mat, series, series_name, pay_plans, show_totals=True,
         textcoords="offset points", fontsize=10, color="#666666", ha="left")
     if highlight_quals:
         ax.annotate(
-            "Outlined cells: hires whose grade the degree alone could qualify them for "
-            "(OPM standards: bachelor's→GS-7, master's→GS-9, Ph.D.→GS-11)",
+            "Outlined cells: grades the degree alone could qualify the hire for "
+            "(OPM: bachelor's→GS-5/7, master's→GS-9, Ph.D.→GS-11; a degree also qualifies for grades below it)",
             xy=(0, 1), xycoords="axes fraction", xytext=(0, 8),
             textcoords="offset points", fontsize=8.5, color="#1565c0", ha="left")
 

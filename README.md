@@ -18,7 +18,8 @@ accession_heatmap("2210", pay_plans="gs+gg",    # outline cells where the degree
 
 Options: `series` (a code, or `None` for all occupations) · `pay_plans`
 (`"gs"`, `"gs+gg"`, `"all"`) · `totals` (row/column total strips) ·
-`highlight_quals` (outline bachelor's→GS-7 / master's→GS-9 / Ph.D.→GS-11 cells).
+`highlight_quals` (outline the degree→grade staircase: bachelor's→GS-5/7,
+master's→GS-5/7/9, Ph.D.→GS-5/7/9/11 — each degree also covers lower entry grades).
 
 Open [`heatmaps.ipynb`](heatmaps.ipynb) to see a figure rendered for each series.
 
