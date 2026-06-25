@@ -12,8 +12,8 @@ from ehri_heatmaps import accession_heatmap
 accession_heatmap("2210")                       # GS hires only
 accession_heatmap("1530", all_plans=True)       # GS+GG on the grade scale, other plans pooled
 accession_heatmap(pay_plans="gs+gg")            # ALL occupations (series=None), GS+GG
-accession_heatmap("2210", pay_plans="gs+gg",    # outline cells where the degree could be
-                  totals=False, highlight_quals=True)  # the qualifying basis for the grade
+accession_heatmap("2210", pay_plans="gs+gg",    # outline grades a hire's degree
+                  highlight_quals=True)         # could qualify them for (+ share box)
 ```
 
 Options: `series` (a code, or `None` for all occupations) · `pay_plans`

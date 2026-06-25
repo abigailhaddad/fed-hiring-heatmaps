@@ -174,9 +174,9 @@ def accession_heatmap(series=None, pay_plans=None, all_plans=False,
         Backward-compatible shortcut: True == pay_plans="all".
     totals : bool   show the grey row/column total strips (default True).
     highlight_quals : bool
-        Outline cells where the degree alone could qualify the hire for that
-        grade. Staircase: bachelor's opens GS-5/7, master's GS-5/7/9, Ph.D.
-        GS-5/7/9/11 (each degree also covers the lower degree-entry grades).
+        Outline cells where a hire's degree could qualify them for that grade.
+        Staircase: bachelor's opens GS-5/7, master's GS-5/7/9, Ph.D. GS-5/7/9/11
+        (each degree also covers the lower degree-entry grades).
     save : bool   write a PNG (default heatmap_<series|all>[_gsgg|_allplans].png)
     out : str     explicit output path (implies save)
 
@@ -278,7 +278,7 @@ def _plot(mat, series, series_name, pay_plans, show_totals=True,
         ax.text(
             -0.3, 2.1,
             f"{share:.0%} of hires\n(n = {int(qual_sum):,})\nsit in an outlined cell —\n"
-            "their degree alone could\nqualify them for that grade",
+            "their degree could qualify\nthem for that grade",
             ha="left", va="center", fontsize=9.5, color="#0d3b66", zorder=6,
             bbox=dict(boxstyle="round,pad=0.5", facecolor="white",
                       edgecolor=qual_color, linewidth=1.8, alpha=0.95))
@@ -337,7 +337,7 @@ def _plot(mat, series, series_name, pay_plans, show_totals=True,
         textcoords="offset points", fontsize=10, color="#666666", ha="left")
     if highlight_quals:
         ax.annotate(
-            "Outlined cells: grades the degree alone could qualify the hire for "
+            "Outlined cells: grades a hire's degree could qualify them for "
             "(OPM: bachelor's→GS-5/7, master's→GS-9, Ph.D.→GS-11; a degree also qualifies for grades below it)",
             xy=(0, 1), xycoords="axes fraction", xytext=(0, 8),
             textcoords="offset points", fontsize=8.5, color="#1565c0", ha="left")
