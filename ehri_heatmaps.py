@@ -342,10 +342,7 @@ def _plot(mat, series, series_name, pay_plans, show_totals=True,
             xy=(0, 1), xycoords="axes fraction", xytext=(0, 8),
             textcoords="offset points", fontsize=8.5, color="#1565c0", ha="left")
 
-    cb = fig.colorbar(im, ax=ax, fraction=0.022, pad=0.06)
-    cb.set_label("New hires", fontsize=9)
-    cb.outline.set_visible(False)
-    cb.ax.tick_params(length=0, labelsize=8)
+    # no colorbar: every cell is labeled with its count, so the scale is redundant
     fig.tight_layout()
     return fig
 
