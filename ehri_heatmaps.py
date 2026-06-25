@@ -47,13 +47,14 @@ GRADE_ORDER = [f"{g:02d}" for g in range(1, 16)]  # GS-01 .. GS-15
 # Cells where the degree alone can qualify a hire for that grade under OPM
 # qualification standards: grade -> set of education buckets at/above the
 # qualifying credential. (Bachelor's -> GS-7 w/ superior academic achievement;
-# Master's -> GS-9; Ph.D. -> GS-11/12.)
+# Master's -> GS-9; Ph.D./equivalent doctoral -> GS-11.) These mark the top
+# grade the degree reaches; a degree also qualifies for grades below it.
 _ADVANCED = {"Bachelor's", "Post-bachelor's", "Master's", "Doctorate", "Other prof/adv"}
 _MASTERS_UP = {"Master's", "Doctorate", "Other prof/adv"}
 QUAL_RULES = {
     "07": _ADVANCED,            # bachelor's or higher
     "09": _MASTERS_UP,          # master's or higher
-    "12": {"Doctorate"},        # Ph.D.
+    "11": {"Doctorate"},        # Ph.D.
 }
 
 
@@ -166,7 +167,7 @@ def accession_heatmap(series=None, pay_plans=None, all_plans=False,
     totals : bool   show the grey row/column total strips (default True).
     highlight_quals : bool
         Outline cells where the degree alone could qualify the hire for that
-        grade (bachelor's+→GS-7, master's+→GS-9, Ph.D.→GS-12).
+        grade (bachelor's+→GS-7, master's+→GS-9, Ph.D.→GS-11).
     save : bool   write a PNG (default heatmap_<series|all>[_gsgg|_allplans].png)
     out : str     explicit output path (implies save)
 
@@ -316,7 +317,7 @@ def _plot(mat, series, series_name, pay_plans, show_totals=True,
     if highlight_quals:
         ax.annotate(
             "Outlined cells: hires whose grade the degree alone could qualify them for "
-            "(OPM standards: bachelor's→GS-7, master's→GS-9, Ph.D.→GS-12)",
+            "(OPM standards: bachelor's→GS-7, master's→GS-9, Ph.D.→GS-11)",
             xy=(0, 1), xycoords="axes fraction", xytext=(0, 8),
             textcoords="offset points", fontsize=8.5, color="#1565c0", ha="left")
 
