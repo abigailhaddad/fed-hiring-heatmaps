@@ -44,6 +44,18 @@ CODE_TO_BUCKET = {c: name for name, codes in EDU_BUCKETS for c in codes}
 EDU_ORDER = [name for name, _ in EDU_BUCKETS]
 GRADE_ORDER = [f"{g:02d}" for g in range(1, 16)]  # GS-01 .. GS-15
 
+# Cells where the degree alone can qualify a hire for that grade under OPM
+# qualification standards: grade -> set of education buckets at/above the
+# qualifying credential. (Bachelor's -> GS-7 w/ superior academic achievement;
+# Master's -> GS-9; Ph.D. -> GS-11/12.)
+_ADVANCED = {"Bachelor's", "Post-bachelor's", "Master's", "Doctorate", "Other prof/adv"}
+_MASTERS_UP = {"Master's", "Doctorate", "Other prof/adv"}
+QUAL_RULES = {
+    "07": _ADVANCED,            # bachelor's or higher
+    "09": _MASTERS_UP,          # master's or higher
+    "12": {"Doctorate"},        # Ph.D.
+}
+
 
 # --------------------------------------------------------------------------- #
 # data access (cached so repeated calls in a notebook are cheap)
@@ -73,42 +85,55 @@ def _monthly_urls():
     return tuple(f"hf://datasets/{REPO}/{v[1]}" for _, v in sorted(best.items()))
 
 
+# pay-plan scope -> SQL filter on pay_plan_code
+PLAN_FILTERS = {
+    "gs": "AND pay_plan_code = 'GS'",            # General Schedule only
+    "gs+gg": "AND pay_plan_code IN ('GS', 'GG')", # GS + GG (same grade scale)
+    "all": "",                                    # every pay plan
+}
+
+
 @functools.lru_cache(maxsize=64)
-def _fetch(series, all_plans):
+def _fetch(series, pay_plans):
     con = _connection()
     lst = "[" + ",".join(f"'{u}'" for u in _monthly_urls()) + "]"
     src = f"read_parquet({lst})"
-    where = (f"occupational_series_code = '{series}' "
-             f"AND personnel_action_effective_date_yyyymm >= '{START_MONTH}'")
-    name_row = con.execute(
-        f"SELECT occupational_series FROM {src} WHERE {where} "
-        f"GROUP BY 1 ORDER BY SUM(TRY_CAST(count AS BIGINT)) DESC LIMIT 1"
-    ).fetchone()
-    name = name_row[0] if name_row else series
-    plan_filter = "" if all_plans else "AND pay_plan_code = 'GS'"
+    conds = [f"personnel_action_effective_date_yyyymm >= '{START_MONTH}'"]
+    if series is not None:
+        conds.append(f"occupational_series_code = '{series}'")
+    where = " AND ".join(conds)
+    if series is None:
+        name = "All occupations"
+    else:
+        name_row = con.execute(
+            f"SELECT occupational_series FROM {src} WHERE {where} "
+            f"GROUP BY 1 ORDER BY SUM(TRY_CAST(count AS BIGINT)) DESC LIMIT 1"
+        ).fetchone()
+        name = name_row[0] if name_row else series
     df = con.execute(f"""
         SELECT pay_plan_code, grade,
                education_level_code AS edu,
                SUM(TRY_CAST(count AS BIGINT)) AS hires
         FROM {src}
-        WHERE {where} {plan_filter}
+        WHERE {where} {PLAN_FILTERS[pay_plans]}
         GROUP BY 1, 2, 3
     """).df()
     return df, name
 
 
-def _matrix(df, all_plans):
+def _matrix(df, pay_plans):
     df = df.copy()
     df["bucket"] = df["edu"].map(lambda c: CODE_TO_BUCKET.get(c, "Below HS / unknown"))
-    if not all_plans:
-        df = df[df["grade"].isin(GRADE_ORDER)]
-        cols = GRADE_ORDER
-        df["col"] = df["grade"]
-    else:
+    if pay_plans == "all":
         # GS & GG share the GS grade scale; everything else -> one pooled column
         gsgg = df["pay_plan_code"].isin(["GS", "GG"]) & df["grade"].isin(GRADE_ORDER)
         df["col"] = np.where(gsgg, df["grade"], OTHER_COL)
         cols = GRADE_ORDER + [OTHER_COL]
+    else:
+        # gs / gs+gg: already filtered to comparable plans, just the grade scale
+        df = df[df["grade"].isin(GRADE_ORDER)]
+        df["col"] = df["grade"]
+        cols = GRADE_ORDER
     piv = (df.groupby(["bucket", "col"])["hires"].sum().reset_index()
              .pivot(index="bucket", columns="col", values="hires"))
     return piv.reindex(index=EDU_ORDER, columns=cols).fillna(0)
@@ -117,36 +142,60 @@ def _matrix(df, all_plans):
 # --------------------------------------------------------------------------- #
 # the one public function
 # --------------------------------------------------------------------------- #
-def accession_heatmap(series, all_plans=False, save=False, out=None):
-    """Render the grade x education heatmap for an occupational series.
+_SUFFIX = {"gs": "", "gs+gg": "_gsgg", "all": "_allplans"}
+
+
+def accession_heatmap(series=None, pay_plans=None, all_plans=False,
+                      totals=True, highlight_quals=False, save=False, out=None):
+    """Render the grade x education heatmap of new federal hires.
 
     Parameters
     ----------
-    series : str   e.g. "2210" (IT Mgmt), "1550" (Comp Sci), "1530" (Statistics)
+    series : str or None
+        Occupational series code, e.g. "2210" (IT Mgmt), "1550" (Comp Sci).
+        None -> ALL occupations combined (overall hiring).
+    pay_plans : {"gs", "gs+gg", "all"} or None
+        Which pay plans to include and how to lay out the x-axis:
+          "gs"    -> General Schedule only (GS-01..GS-15).
+          "gs+gg" -> GS and GG together on the GS grade scale (no other column).
+          "all"   -> GS+GG on the grade scale; every other pay plan pooled into
+                     a single "Other plans" column.
+        Default None resolves to "all" if all_plans=True, else "gs".
     all_plans : bool
-        False -> GS pay plan only (x-axis = GS-01..GS-15).
-        True  -> GS+GG share the grade scale; all other pay plans (demo bands,
-                 AD, etc.) are pooled into a single "Other plans" column.
-    save : bool   if True, write a PNG (default name heatmap_<series>[_allplans].png)
+        Backward-compatible shortcut: True == pay_plans="all".
+    totals : bool   show the grey row/column total strips (default True).
+    highlight_quals : bool
+        Outline cells where the degree alone could qualify the hire for that
+        grade (bachelor's+→GS-7, master's+→GS-9, Ph.D.→GS-12).
+    save : bool   write a PNG (default heatmap_<series|all>[_gsgg|_allplans].png)
     out : str     explicit output path (implies save)
 
     Returns
     -------
     matplotlib.figure.Figure  (displays inline in a notebook)
     """
-    series = str(series)
-    df, series_name = _fetch(series, all_plans)
-    mat = _matrix(df, all_plans)
-    fig = _plot(mat, series, series_name, all_plans)
+    if pay_plans is None:
+        pay_plans = "all" if all_plans else "gs"
+    pay_plans = pay_plans.lower().replace("gsgg", "gs+gg")
+    if pay_plans not in PLAN_FILTERS:
+        raise ValueError(f"pay_plans must be one of {list(PLAN_FILTERS)}")
+    series = None if series is None else str(series)
+
+    df, series_name = _fetch(series, pay_plans)
+    mat = _matrix(df, pay_plans)
+    fig = _plot(mat, series, series_name, pay_plans,
+                show_totals=totals, highlight_quals=highlight_quals)
     if save or out:
-        suffix = "_allplans" if all_plans else ""
-        path = out or f"heatmap_{series}{suffix}.png"
+        tag = series if series is not None else "all"
+        path = out or f"heatmap_{tag}{_SUFFIX[pay_plans]}.png"
         fig.savefig(path, dpi=160, bbox_inches="tight")
         print(f"wrote {path}")
     return fig
 
 
-def _plot(mat, series, series_name, all_plans):
+def _plot(mat, series, series_name, pay_plans, show_totals=True,
+          highlight_quals=False):
+    pooled = pay_plans == "all"      # has an "Other plans" column
     plt.rcParams.update({
         "font.family": "DejaVu Sans",
         "axes.edgecolor": "#cccccc",
@@ -173,12 +222,13 @@ def _plot(mat, series, series_name, all_plans):
         s.set_visible(False)
 
     ax.set_xticks(range(ncols))
-    ax.set_xticklabels(col_labels, fontsize=9, rotation=90 if all_plans else 0)
+    ax.set_xticklabels(col_labels, fontsize=9, rotation=90 if pooled else 0)
     ax.set_yticks(range(nrows))
     ax.set_yticklabels(EDU_ORDER, fontsize=9)
-    # GS mode is compact enough to label top+bottom; all-plans bottom only
-    # (vertical labels would collide with the subtitle).
-    ax.tick_params(axis="x", labeltop=not all_plans, labelbottom=True)
+    # Label top+bottom only when there's room: the pooled view's vertical
+    # "Other plans" label and the qualifying-cells caption both crowd the top.
+    top_labels = not pooled and not highlight_quals
+    ax.tick_params(axis="x", labeltop=top_labels, labelbottom=True)
 
     def fmt(v):
         return f"{int(v):,}" if v else ""
@@ -186,56 +236,89 @@ def _plot(mat, series, series_name, all_plans):
     def fmt_pct(v):
         return f"{100*v/grand:.1f}%" if v and grand else ""
 
-    # body cell counts
+    # cells where the degree could be the qualifying credential -> bold outline
+    qual_color = "#1565c0"
+    quals = QUAL_RULES if highlight_quals else {}
+    qual_cells = set()
+    for j, c in enumerate(mat.columns):
+        for i, bucket in enumerate(EDU_ORDER):
+            if c in quals and bucket in quals[c] and data[i, j] > 0:
+                qual_cells.add((i, j))
+
+    # body cell counts (bold for highlighted cells)
     for i in range(nrows):
         for j in range(ncols):
             v = data[i, j]
             if not v:
                 continue
-            ax.text(j, i, fmt(v), ha="center", va="center", fontsize=7.5,
+            hot = (i, j) in qual_cells
+            ax.text(j, i, fmt(v), ha="center", va="center",
+                    fontsize=8 if hot else 7.5,
+                    fontweight="bold" if hot else "normal",
                     color="white" if v > 0.55 * vmax else "#333333")
 
-    # margin totals (grey strips): count + share of all hires
-    grey, dark = "#e8e8e8", "#bdbdbd"
-    for i in range(nrows):
-        ax.add_patch(Rectangle((ncols - .5, i - .5), 1, 1, facecolor=grey,
-                               edgecolor="white", lw=2, clip_on=False))
-        if row_tot[i]:
-            ax.text(ncols, i - .15, fmt(row_tot[i]), ha="center", va="center",
-                    fontsize=8.5, fontweight="bold", color="#222222")
-            ax.text(ncols, i + .22, fmt_pct(row_tot[i]), ha="center", va="center",
-                    fontsize=7.5, color="#777777")
-    for j in range(ncols):
-        ax.add_patch(Rectangle((j - .5, nrows - .5), 1, 1, facecolor=grey,
-                               edgecolor="white", lw=2, clip_on=False))
-        if col_tot[j]:
-            ax.text(j, nrows - .15, fmt(col_tot[j]), ha="center", va="center",
-                    fontsize=8.5, fontweight="bold", color="#222222")
-            ax.text(j, nrows + .22, fmt_pct(col_tot[j]), ha="center", va="center",
-                    fontsize=7.5, color="#777777")
-    ax.add_patch(Rectangle((ncols - .5, nrows - .5), 1, 1, facecolor=dark,
-                           edgecolor="white", lw=2, clip_on=False))
-    ax.text(ncols, nrows, fmt(grand), ha="center", va="center",
-            fontsize=9, fontweight="bold", color="black")
-    ax.text(ncols, -1.0, "Total", ha="center", va="center",
-            fontsize=9, fontweight="bold", color="#555555")
-    ax.text(-0.85, nrows, "Total", ha="right", va="center",
-            fontsize=9, fontweight="bold", color="#555555")
+    for (i, j) in qual_cells:
+        ax.add_patch(Rectangle((j - .5, i - .5), 1, 1, fill=False,
+                               edgecolor=qual_color, lw=2.5, zorder=5))
 
-    ax.set_xlim(-.5, ncols + .5)
-    ax.set_ylim(nrows + .5, -.5)
-    ax.set_xlabel("Grade  (GS + GG; all other pay plans pooled as 'Other plans')"
-                  if all_plans else "Grade", fontsize=10, labelpad=8)
+    # margin totals (grey strips): count + share of all hires
+    if show_totals:
+        grey, dark = "#e8e8e8", "#bdbdbd"
+        for i in range(nrows):
+            ax.add_patch(Rectangle((ncols - .5, i - .5), 1, 1, facecolor=grey,
+                                   edgecolor="white", lw=2, clip_on=False))
+            if row_tot[i]:
+                ax.text(ncols, i - .15, fmt(row_tot[i]), ha="center", va="center",
+                        fontsize=8.5, fontweight="bold", color="#222222")
+                ax.text(ncols, i + .22, fmt_pct(row_tot[i]), ha="center", va="center",
+                        fontsize=7.5, color="#777777")
+        for j in range(ncols):
+            ax.add_patch(Rectangle((j - .5, nrows - .5), 1, 1, facecolor=grey,
+                                   edgecolor="white", lw=2, clip_on=False))
+            if col_tot[j]:
+                ax.text(j, nrows - .15, fmt(col_tot[j]), ha="center", va="center",
+                        fontsize=8.5, fontweight="bold", color="#222222")
+                ax.text(j, nrows + .22, fmt_pct(col_tot[j]), ha="center", va="center",
+                        fontsize=7.5, color="#777777")
+        ax.add_patch(Rectangle((ncols - .5, nrows - .5), 1, 1, facecolor=dark,
+                               edgecolor="white", lw=2, clip_on=False))
+        ax.text(ncols, nrows, fmt(grand), ha="center", va="center",
+                fontsize=9, fontweight="bold", color="black")
+        ax.text(ncols, -1.0, "Total", ha="center", va="center",
+                fontsize=9, fontweight="bold", color="#555555")
+        ax.text(-0.85, nrows, "Total", ha="right", va="center",
+                fontsize=9, fontweight="bold", color="#555555")
+
+    pad = .5 if show_totals else -.5
+    ax.set_xlim(-.5, ncols + pad)
+    ax.set_ylim(nrows + pad, -.5)
+    xlabel = {
+        "gs": "Grade",
+        "gs+gg": "Grade  (GS + GG)",
+        "all": "Grade  (GS + GG; all other pay plans pooled as 'Other plans')",
+    }[pay_plans]
+    ax.set_xlabel(xlabel, fontsize=10, labelpad=8)
     ax.set_ylabel("Education level", fontsize=10)
 
     title_name = series_name.title() if series_name.isupper() else series_name
-    scope = "new hires, all pay plans" if all_plans else "new GS hires"
-    ax.set_title(f"{series} ({title_name}) — {scope} by grade & education",
+    scope = {
+        "gs": "new GS hires",
+        "gs+gg": "new GS + GG hires",
+        "all": "new hires, all pay plans",
+    }[pay_plans]
+    prefix = title_name if series is None else f"{series} ({title_name})"
+    ax.set_title(f"{prefix} — {scope} by grade & education",
                  fontsize=15, fontweight="bold", pad=34, loc="left")
     ax.annotate(
         f"Jan 2021 – present   ·   n = {int(grand):,}   ·   source: OPM / EHRI accessions",
         xy=(0, 1), xycoords="axes fraction", xytext=(0, 22),
         textcoords="offset points", fontsize=10, color="#666666", ha="left")
+    if highlight_quals:
+        ax.annotate(
+            "Outlined cells: hires whose grade the degree alone could qualify them for "
+            "(OPM standards: bachelor's→GS-7, master's→GS-9, Ph.D.→GS-12)",
+            xy=(0, 1), xycoords="axes fraction", xytext=(0, 8),
+            textcoords="offset points", fontsize=8.5, color="#1565c0", ha="left")
 
     cb = fig.colorbar(im, ax=ax, fraction=0.022, pad=0.06)
     cb.set_label("New hires", fontsize=9)
@@ -246,8 +329,15 @@ def _plot(mat, series, series_name, all_plans):
 
 
 if __name__ == "__main__":
+    # usage: python ehri_heatmaps.py [SERIES|overall] [gs|gs+gg|allplans]
     import sys
-    args = sys.argv[1:]
-    ap = "all" in args
-    pos = [a for a in args if a != "all"] or ["2210"]
-    accession_heatmap(pos[0], all_plans=ap, save=True)
+    series, pay_plans = "2210", "gs"
+    for a in sys.argv[1:]:
+        al = a.lower()
+        if al in ("gs", "gsgg", "gs+gg", "all", "allplans"):
+            pay_plans = {"gsgg": "gs+gg", "allplans": "all"}.get(al, al)
+        elif al in ("overall", "all-series", "none"):
+            series = None
+        else:
+            series = a
+    accession_heatmap(series, pay_plans=pay_plans, save=True)

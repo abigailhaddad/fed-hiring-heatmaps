@@ -9,9 +9,16 @@ Everything runs off one function:
 ```python
 from ehri_heatmaps import accession_heatmap
 
-accession_heatmap("2210")                  # GS hires only
-accession_heatmap("1530", all_plans=True)  # GS+GG on the grade scale, other plans pooled
+accession_heatmap("2210")                       # GS hires only
+accession_heatmap("1530", all_plans=True)       # GS+GG on the grade scale, other plans pooled
+accession_heatmap(pay_plans="gs+gg")            # ALL occupations (series=None), GS+GG
+accession_heatmap("2210", pay_plans="gs+gg",    # outline cells where the degree could be
+                  totals=False, highlight_quals=True)  # the qualifying basis for the grade
 ```
+
+Options: `series` (a code, or `None` for all occupations) · `pay_plans`
+(`"gs"`, `"gs+gg"`, `"all"`) · `totals` (row/column total strips) ·
+`highlight_quals` (outline bachelor's→GS-7 / master's→GS-9 / Ph.D.→GS-12 cells).
 
 Open [`heatmaps.ipynb`](heatmaps.ipynb) to see a figure rendered for each series.
 
