@@ -36,6 +36,20 @@ ehri.bucket_maps()        # how codes/grades collapse into the 5x4 buckets
 ehri.crosstab("2210")     # the 5x4 table of hires the heatmap colors
 ```
 
+### Degree vs. experience, across the whole workforce
+
+Join every occupational series to OPM's published education-requirement tier
+([opm-educ-req](https://github.com/abigailhaddad/opm-educ-req)) and ask: of all
+new GS+GG hires, how many came in with a degree that could qualify them for
+their grade — versus on experience?
+
+```python
+ehri.qualifying_overall()       # headline: ~18% degree-qualifiable, ~82% experience
+ehri.qualifying_by_tier()       # by OPM tier (Mandatory Prof/Qual, Optional, None)
+ehri.qualifying_by_series()     # per-series detail
+ehri.qualifying_tier_chart()    # the bar chart
+```
+
 ## Data
 
 Source: the public HuggingFace dataset

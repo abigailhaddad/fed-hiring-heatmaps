@@ -211,6 +211,147 @@ def bucket_maps():
 
 
 # --------------------------------------------------------------------------- #
+# occupation-aware: join hiring to OPM education-requirement tiers
+#
+# Were these hires' degrees what qualified them for their grade — or did they
+# come in on experience? We classify each hire by the qualifying staircase
+# (degree could open that grade) and join the occupational series to OPM's
+# published education-requirement tier (from the opm-educ-req project).
+# --------------------------------------------------------------------------- #
+OPM_TIERS_URL = "https://raw.githubusercontent.com/abigailhaddad/opm-educ-req/main/opm_series_tiers.json"
+
+# (tier, mandatory_type) -> readable category, matching the opm-educ-req site
+TIER_CATEGORY = {
+    ("mandatory", "professional"):  "Mandatory: Professional",
+    ("mandatory", "qualification"): "Mandatory: Qualification",
+    ("optional", ""):               "Optional",
+    ("none", ""):                   "None",
+}
+TIER_ORDER = ["Mandatory: Professional", "Mandatory: Qualification",
+              "Optional", "None", "Unclassified"]
+
+# the (grade group, education bucket) cells where a degree could qualify the hire
+_QUAL_PAIRS = {(g, e) for g, es in QUAL.items() for e in es}
+
+
+@functools.lru_cache(maxsize=1)
+def opm_tiers():
+    """series_num -> OPM education-requirement tier (from opm-educ-req)."""
+    df = pd.read_json(OPM_TIERS_URL)
+    df["series_num"] = df["series_num"].astype(str).str.zfill(4)
+    df["mandatory_type"] = df["mandatory_type"].fillna("").astype(str)
+    df["category"] = [TIER_CATEGORY.get((t, m), "Optional")
+                      for t, m in zip(df["tier"], df["mandatory_type"])]
+    return df[["series_num", "series_title", "tier", "mandatory_type", "category"]]
+
+
+@functools.lru_cache(maxsize=4)
+def _series_counts(pay_plans):
+    """Per (series, grade, education) hire counts across all occupations."""
+    con = _connection()
+    src = "read_parquet([" + ",".join(f"'{u}'" for u in _monthly_urls()) + "])"
+    return con.execute(f"""
+        SELECT occupational_series_code AS series, grade,
+               education_level_code AS edu,
+               SUM(TRY_CAST(count AS BIGINT)) AS hires
+        FROM {src}
+        WHERE personnel_action_effective_date_yyyymm >= '{START_MONTH}'
+          AND {PLAN_FILTERS[pay_plans]}
+        GROUP BY 1, 2, 3
+    """).df()
+
+
+def qualifying_by_series(pay_plans="gs+gg"):
+    """Per occupational series: hires, how many a degree could have qualified,
+    the share, and the OPM education-requirement category."""
+    pay_plans = pay_plans.lower().replace("gsgg", "gs+gg")
+    df = _series_counts(pay_plans)
+    df = df[df["grade"].isin(GS_GRADES)].copy()
+    df["series"] = df["series"].astype(str).str.zfill(4)
+    df["edu_bucket"] = df["edu"].map(lambda c: CODE_TO_EDU.get(c, "≤ High school"))
+    df["grade_group"] = df["grade"].map(_grade_group)
+    df["qual_hires"] = [h if (g, e) in _QUAL_PAIRS else 0
+                        for h, g, e in zip(df["hires"], df["grade_group"], df["edu_bucket"])]
+    g = (df.groupby("series", as_index=False)
+           .agg(hires=("hires", "sum"), degree_qualifying=("qual_hires", "sum")))
+    g["pct_degree_qualifying"] = (100 * g["degree_qualifying"] / g["hires"]).round(1)
+    g = g.merge(opm_tiers()[["series_num", "series_title", "category"]],
+                left_on="series", right_on="series_num", how="left").drop(columns="series_num")
+    g["category"] = g["category"].fillna("Unclassified")
+    return g.sort_values("hires", ascending=False).reset_index(drop=True)
+
+
+def qualifying_by_tier(pay_plans="gs+gg"):
+    """Roll up to OPM education-requirement category: hires and the share whose
+    degree could have qualified them for their grade."""
+    g = qualifying_by_series(pay_plans)
+    agg = (g.groupby("category", as_index=False)
+             .agg(hires=("hires", "sum"), degree_qualifying=("degree_qualifying", "sum")))
+    agg["pct_degree_qualifying"] = (100 * agg["degree_qualifying"] / agg["hires"]).round(1)
+    agg["__o"] = agg["category"].map(lambda c: TIER_ORDER.index(c) if c in TIER_ORDER else 99)
+    return agg.sort_values("__o").drop(columns="__o").reset_index(drop=True)
+
+
+def qualifying_overall(pay_plans="gs+gg"):
+    """Headline: across all hires, the share whose degree could have qualified
+    them for their grade (the rest came in on experience)."""
+    g = qualifying_by_series(pay_plans)
+    h, q = int(g["hires"].sum()), int(g["degree_qualifying"].sum())
+    return {"hires": h, "degree_could_qualify": q,
+            "pct_degree_could_qualify": round(100 * q / h, 1),
+            "pct_experience_based": round(100 * (h - q) / h, 1)}
+
+
+def qualifying_tier_chart(pay_plans="gs+gg", save=False, out=None):
+    """Bar chart: share of new hires whose degree could qualify them for their
+    grade, by OPM education-requirement category, with the all-hires average."""
+    tier = qualifying_by_tier(pay_plans)
+    tier = tier[tier["category"] != "Unclassified"]
+    ov = qualifying_overall(pay_plans)
+    cats = list(tier["category"])[::-1]          # plot top-to-bottom in TIER_ORDER
+    pct = list(tier["pct_degree_qualifying"])[::-1]
+    hires = list(tier["hires"].astype(int))[::-1]
+    qual = list(tier["degree_qualifying"].astype(int))[::-1]
+
+    plt.rcParams.update({"font.family": "DejaVu Sans", "figure.facecolor": "white"})
+    fig, ax = plt.subplots(figsize=(10, 3.6))
+    y = range(len(cats))
+    ax.barh(list(y), pct, color="#d4711f", height=0.62, zorder=3)
+    ax.axvline(ov["pct_degree_could_qualify"], color="#1565c0", lw=1.8, ls="--", zorder=4)
+    ax.text(ov["pct_degree_could_qualify"], -0.95,
+            f"all-hires average: {ov['pct_degree_could_qualify']:.0f}%", color="#1565c0",
+            fontsize=9, fontweight="bold", va="center", ha="center")
+
+    for i, (p, h, qn) in enumerate(zip(pct, hires, qual)):
+        ax.text(p + 0.4, i, f"{p:.0f}%   ({qn:,} of {h:,})",
+                va="center", ha="left", fontsize=9, color="#333333")
+
+    ax.set_yticks(list(y))
+    ax.set_yticklabels(cats, fontsize=10)
+    ax.set_xlim(0, max(pct) * 1.45)
+    ax.set_ylim(-1.3, len(cats) - 0.4)
+    ax.set_xlabel("Share of new hires whose degree could qualify them for their grade", fontsize=9.5)
+    for s in ("top", "right", "left"):
+        ax.spines[s].set_visible(False)
+    ax.tick_params(length=0)
+    ax.set_axisbelow(True)
+    ax.xaxis.grid(True, color="#eee")
+    ax.set_title("Most federal hires aren't qualified into their grade by a degree",
+                 fontsize=14, fontweight="bold", loc="left", pad=24)
+    ax.annotate(
+        f"GS + GG accessions, {_date_range()}   ·   n = {ov['hires']:,}   ·   "
+        "OPM/EHRI hires × OPM education-requirement tier (opm-educ-req)",
+        xy=(0, 1), xycoords="axes fraction", xytext=(0, 8),
+        textcoords="offset points", fontsize=9, color="#666666", ha="left")
+    fig.tight_layout()
+    if save or out:
+        path = out or "qualifying_by_tier.png"
+        fig.savefig(path, dpi=160, bbox_inches="tight")
+        print(f"wrote {path}")
+    return fig
+
+
+# --------------------------------------------------------------------------- #
 # the one public function
 # --------------------------------------------------------------------------- #
 def accession_heatmap(series=None, pay_plans="gs+gg", highlight_quals=True,
