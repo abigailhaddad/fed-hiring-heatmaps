@@ -23,6 +23,7 @@ import calendar
 import functools
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import duckdb
@@ -68,9 +69,9 @@ QUAL = {
     "GS-10–11": {"Doctorate"},
 }
 
-PLAN_FILTERS = {
-    "gs":    "AND pay_plan_code = 'GS'",
-    "gs+gg": "AND pay_plan_code IN ('GS', 'GG')",
+PLAN_FILTERS = {                         # bare predicates on pay_plan_code
+    "gs":    "pay_plan_code = 'GS'",
+    "gs+gg": "pay_plan_code IN ('GS', 'GG')",
 }
 
 
@@ -113,30 +114,51 @@ def _date_range():
     return f"{_month_label(months[0])} – {_month_label(months[-1])}"
 
 
-@functools.lru_cache(maxsize=64)
-def _fetch(series, pay_plans):
-    con = _connection()
-    lst = "[" + ",".join(f"'{u}'" for u in _monthly_urls()) + "]"
-    src = f"read_parquet({lst})"
+def _counts_sql(src, series, pay_plans):
+    """The DuckDB query that pulls the per-(grade, education) hire counts."""
     conds = [f"personnel_action_effective_date_yyyymm >= '{START_MONTH}'"]
     if series is not None:
         conds.append(f"occupational_series_code = '{series}'")
-    where = " AND ".join(conds)
+    conds.append(PLAN_FILTERS[pay_plans])
+    where = "\n      AND ".join(conds)
+    return (
+        "SELECT grade,\n"
+        "       education_level_code AS edu,\n"
+        "       SUM(TRY_CAST(count AS BIGINT)) AS hires   -- rows are pre-aggregated\n"
+        f"FROM {src}\n"
+        f"WHERE {where}\n"
+        "GROUP BY grade, education_level_code"
+    )
+
+
+def build_sql(series=None, pay_plans="gs+gg"):
+    """The query `accession_heatmap` runs, in readable form (for transparency).
+
+    The real `FROM` is `read_parquet([...])` over every monthly accession file;
+    here it's shown as a placeholder so the query fits on screen.
+    """
+    pay_plans = pay_plans.lower().replace("gsgg", "gs+gg")
+    n = len(_monthly_urls())
+    src = (f"read_parquet([ {n} monthly accession files,\n"
+           f"               'hf://datasets/{REPO}/accessions/accessions_YYYYMM_v*.parquet' ])")
+    return _counts_sql(src, None if series is None else str(series), pay_plans)
+
+
+@functools.lru_cache(maxsize=64)
+def _fetch(series, pay_plans):
+    con = _connection()
+    src = "read_parquet([" + ",".join(f"'{u}'" for u in _monthly_urls()) + "])"
     if series is None:
         name = "All occupations"
     else:
         row = con.execute(
-            f"SELECT occupational_series FROM {src} WHERE {where} "
+            f"SELECT occupational_series FROM {src} "
+            f"WHERE personnel_action_effective_date_yyyymm >= '{START_MONTH}' "
+            f"AND occupational_series_code = '{series}' "
             f"GROUP BY 1 ORDER BY SUM(TRY_CAST(count AS BIGINT)) DESC LIMIT 1"
         ).fetchone()
         name = row[0] if row else series
-    df = con.execute(f"""
-        SELECT grade, education_level_code AS edu,
-               SUM(TRY_CAST(count AS BIGINT)) AS hires
-        FROM {src}
-        WHERE {where} {PLAN_FILTERS[pay_plans]}
-        GROUP BY 1, 2
-    """).df()
+    df = con.execute(_counts_sql(src, series, pay_plans)).df()
     return df, name
 
 
@@ -147,6 +169,45 @@ def _matrix(df):
     piv = (df.groupby(["row", "col"])["hires"].sum().reset_index()
              .pivot(index="row", columns="col", values="hires"))
     return piv.reindex(index=EDU_ORDER, columns=GRADE_ORDER).fillna(0)
+
+
+# --------------------------------------------------------------------------- #
+# transparency helpers: see the data behind a figure, step by step
+# --------------------------------------------------------------------------- #
+def dataset_info():
+    """What's being read: dataset, number of monthly files, and date range."""
+    return {"dataset": REPO,
+            "monthly_accession_files": len(_monthly_urls()),
+            "date_range": _date_range()}
+
+
+def fetch_counts(series=None, pay_plans="gs+gg"):
+    """Raw query result: one row per (grade, education_level_code) with hires.
+
+    This is exactly what `build_sql(series, pay_plans)` returns, run against the
+    monthly parquet files. Education codes and grades are still raw here.
+    """
+    pay_plans = pay_plans.lower().replace("gsgg", "gs+gg")
+    df, _ = _fetch(None if series is None else str(series), pay_plans)
+    return df.sort_values("hires", ascending=False).reset_index(drop=True)
+
+
+def crosstab(series=None, pay_plans="gs+gg"):
+    """The 5 x 4 table of hires the heatmap draws (after bucketing)."""
+    pay_plans = pay_plans.lower().replace("gsgg", "gs+gg")
+    df, _ = _fetch(None if series is None else str(series), pay_plans)
+    return _matrix(df).astype(int)
+
+
+def bucket_maps():
+    """Two small tables documenting how raw codes/grades collapse into buckets."""
+    edu = pd.DataFrame(
+        [(label, ", ".join(sorted(c for c in codes if c))) for label, codes in SIMPLE_EDU],
+        columns=["education bucket", "education_level_code(s)"])
+    grade = pd.DataFrame(
+        [(f"GS-{g}", _grade_group(g)) for g in sorted(GS_GRADES)],
+        columns=["grade", "grade group"])
+    return edu, grade
 
 
 # --------------------------------------------------------------------------- #

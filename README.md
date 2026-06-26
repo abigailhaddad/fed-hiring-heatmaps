@@ -22,6 +22,19 @@ Options: `series` (a code, or `None` for all occupations) · `pay_plans`
 `totals` (the % margin strips, default `True`).
 
 Open [`heatmaps.ipynb`](heatmaps.ipynb) to see a figure rendered for each series.
+Its first half walks the data pull step by step so nothing is a black box.
+
+### See the data behind a figure
+
+The same numbers a chart draws are available as plain tables:
+
+```python
+ehri.dataset_info()       # dataset, # monthly files, date range
+ehri.build_sql("2210")    # the exact DuckDB query (readable form)
+ehri.fetch_counts("2210") # raw query result: hires by (grade, education code)
+ehri.bucket_maps()        # how codes/grades collapse into the 5x4 buckets
+ehri.crosstab("2210")     # the 5x4 table of hires the heatmap colors
+```
 
 ## Data
 
