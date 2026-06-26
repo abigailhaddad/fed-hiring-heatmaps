@@ -4,26 +4,22 @@ Reproducible heatmaps of **new federal hires** by **GS grade** and **education
 level**, for any occupational series — e.g. 2210 (IT Management), 1550 (Computer
 Science), 1560 (Data Science), 1530 (Statistics).
 
-Everything runs off one function:
+One clean, publication-ready layout — **5 education buckets × 4 grade groups** —
+off one function:
 
 ```python
 from ehri_heatmaps import accession_heatmap
 
-accession_heatmap("2210")                       # GS hires only
-accession_heatmap("1530", all_plans=True)       # GS+GG on the grade scale, other plans pooled
-accession_heatmap(pay_plans="gs+gg")            # ALL occupations (series=None), GS+GG
-accession_heatmap("2210", pay_plans="gs+gg",    # outline grades a hire's degree
-                  highlight_quals=True)         # could qualify them for (+ share box)
-accession_heatmap("2210", simple=True,          # readable Substack layout:
-                  highlight_quals=True)         # 5 education rows x 4 grade groups
+accession_heatmap("2210")               # IT Management
+accession_heatmap()                     # all occupations
+accession_heatmap("1530", pay_plans="gs")   # GS only (default is GS + GG)
 ```
 
+Defaults: GS + GG, with the degree→grade *could-qualify* staircase outlined
+(bachelor's→GS-7, master's→GS-9, Ph.D.→GS-11) and the headline share in a box.
 Options: `series` (a code, or `None` for all occupations) · `pay_plans`
-(`"gs"`, `"gs+gg"`, `"all"`) · `totals` (row/column total strips) ·
-`highlight_quals` (outline the degree→grade staircase: bachelor's→GS-5/7,
-master's→GS-5/7/9, Ph.D.→GS-5/7/9/11 — each degree also covers lower entry grades) ·
-`simple` (publication layout: 5 education buckets × 4 grade groups — ≤GS-7,
-GS-8–9, GS-10–11, GS-12+ — with `%`-only totals; implies GS+GG).
+(`"gs+gg"` default, or `"gs"`) · `highlight_quals` (default `True`) ·
+`totals` (the % margin strips, default `True`).
 
 Open [`heatmaps.ipynb`](heatmaps.ipynb) to see a figure rendered for each series.
 
@@ -36,16 +32,20 @@ which mirrors OPM/EHRI **accessions** (new federal hires) published at
 
 - Parquet is **streamed remotely with DuckDB** — nothing is downloaded to disk.
 - Each source row is pre-aggregated, so counts are `SUM(count)`, not row counts.
-- Scope per figure: a single `occupational_series_code`, accession effective
-  month ≥ `START_MONTH` (Jan 2021 by default; change it in `ehri_heatmaps.py`).
+- Scope per figure: a single `occupational_series_code` (or all occupations),
+  accession effective month ≥ `START_MONTH` (Jan 2021 by default; change it in
+  `ehri_heatmaps.py`).
 
-### GS-only vs. all-plans
+### Buckets
 
-`all_plans=False` (default) shows only General Schedule (GS) hires on the
-GS-01…GS-15 scale. `all_plans=True` keeps GS **and GG** (which share the GS
-grade scale) and pools every other pay plan — demonstration bands (ND, DP, DB,
-NH…), AD, FV, etc. — into one **"Other plans"** column, since their grade
-numbers are not comparable to GS grades.
+- **Education (5):** ≤ high school · some college/associate · bachelor's/post-bach
+  · master's/professional · doctorate. "Master's / professional" folds in
+  first-professional and sixth-year degrees, credited at GS-9.
+- **Grade groups (4):** ≤ GS-7 · GS-8–9 · GS-10–11 · GS-12+, on the GS scale
+  (GS + GG by default; `pay_plans="gs"` for GS only).
+- **Qualifying staircase:** outlined cells are where a degree could qualify the
+  hire for that grade (bachelor's→GS-7, master's→GS-9, Ph.D.→GS-11; a higher
+  degree also covers the lower groups).
 
 ## Reproduce
 
@@ -53,8 +53,8 @@ numbers are not comparable to GS grades.
 pip install -r requirements.txt
 jupyter lab heatmaps.ipynb      # run all cells
 # or regenerate a single PNG from the CLI:
-python ehri_heatmaps.py 2210            # -> heatmap_2210.png
-python ehri_heatmaps.py 1530 all        # -> heatmap_1530_allplans.png
+python ehri_heatmaps.py 2210           # -> heatmap_2210.png
+python ehri_heatmaps.py overall gs     # all occupations, GS only -> heatmap_all.png
 ```
 
 ## Citing
