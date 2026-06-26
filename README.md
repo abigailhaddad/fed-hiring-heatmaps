@@ -14,12 +14,16 @@ accession_heatmap("1530", all_plans=True)       # GS+GG on the grade scale, othe
 accession_heatmap(pay_plans="gs+gg")            # ALL occupations (series=None), GS+GG
 accession_heatmap("2210", pay_plans="gs+gg",    # outline grades a hire's degree
                   highlight_quals=True)         # could qualify them for (+ share box)
+accession_heatmap("2210", simple=True,          # readable Substack layout:
+                  highlight_quals=True)         # 5 education rows x 4 grade groups
 ```
 
 Options: `series` (a code, or `None` for all occupations) · `pay_plans`
 (`"gs"`, `"gs+gg"`, `"all"`) · `totals` (row/column total strips) ·
 `highlight_quals` (outline the degree→grade staircase: bachelor's→GS-5/7,
-master's→GS-5/7/9, Ph.D.→GS-5/7/9/11 — each degree also covers lower entry grades).
+master's→GS-5/7/9, Ph.D.→GS-5/7/9/11 — each degree also covers lower entry grades) ·
+`simple` (publication layout: 5 education buckets × 4 grade groups — ≤GS-7,
+GS-8–9, GS-10–11, GS-12+ — with `%`-only totals; implies GS+GG).
 
 Open [`heatmaps.ipynb`](heatmaps.ipynb) to see a figure rendered for each series.
 
